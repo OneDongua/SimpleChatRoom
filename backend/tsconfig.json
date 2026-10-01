@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "nodenext",
+    // 允许在 import 中书写 .ts 扩展名；编译输出时会自动改写为 .js
+    // （Node.js 24 原生支持直接运行 .ts 文件，需显式带扩展名）
+    "rewriteRelativeImportExtensions": true,
+    // 仅允许可擦除的 TypeScript 语法（如禁止 enum、namespace、构造函数参数属性等）
+    // 因为 Node.js 直接运行 TS 时只是剥离类型，不做语法转换
+    "erasableSyntaxOnly": true,
+    // 保留 import/export 语法原样输出，不做模块转换
+    // 同时强制类型导入必须显式使用 `import type`，避免运行时残留无用导入
+    "verbatimModuleSyntax": true,
+    // 只做类型检查，不生成编译产物（运行时交给 Node.js 直接执行 TS）
+    "noEmit": true,
+    // 开启所有严格类型检查选项
+    "strict": true,
+    // 跳过对第三方声明文件（node_modules 中 .d.ts）的类型检查，加快编译速度
+    "skipLibCheck": true
+  }
+}
