@@ -15,7 +15,7 @@
     gap: 10px;
     padding: 0 5px;
     display: flex;
-    color: var(--text-h);
+    color: var(--text);
 }
 
 .brand-icon {
@@ -131,7 +131,7 @@
     font-size: 1em;
     font-family: inherit;
     text-align: left;
-    color: var(--text-h);
+    color: var(--text);
     background: transparent;
     border: none;
     outline: none;

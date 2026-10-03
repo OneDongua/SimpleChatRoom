@@ -6,9 +6,19 @@ function App() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
+  // 发送消息函数
+  const sendMessage = () => {
+    if (input) {
+      socket.emit('message', input.trim());
+      setInput('');
+    }
+  };
+
+  // 单次 Hook
   useEffect(() => {
     socket.connect();
 
+    // 接收到消息后更新数据
     const onMessage = (message: ChatMessage) => {
       setMessages((prev) => [...prev, message]);
     };
@@ -25,13 +35,6 @@ function App() {
     if (messages.length === 0) return;
     window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
   }, [messages]);
-
-  const sendMessage = () => {
-    if (input) {
-      socket.emit('message', input.trim());
-      setInput('');
-    }
-  };
 
   return (
     <>
@@ -71,7 +74,13 @@ function App() {
           <textarea
             value={input}
             onChange={(e) =>
-              setInput(e.target.value)}/>
+              setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.ctrlKey && e.key === 'Enter') {
+              e.preventDefault();
+              sendMessage();
+            }
+          }}/>
           <button
             className="chat-send-btn"
             disabled={!input}

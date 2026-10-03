@@ -3,8 +3,7 @@
 }
 
 :root {
-    --text: #6b6375;
-    --text-h: #323233;
+    --text: #323233;
     --text-primary: #3f7394;
     --text-secondary: #969799;
     --bg: #f7f8fa;
@@ -33,7 +32,6 @@
 @media (prefers-color-scheme: dark) {
     :root {
         --text: #9ca3af;
-        --text-h: #f3f4f6;
         --bg: #16171d;
         --border: #2e303a;
         --code-bg: #1f2028;
@@ -71,7 +69,7 @@ h1, h2, h3 {
 code {
     display: inline-flex;
     border-radius: 4px;
-    color: var(--text-h);
+    color: var(--text);
     font-size: 15px;
     line-height: 135%;
     padding: 4px 8px;
