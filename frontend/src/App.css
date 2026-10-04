@@ -107,7 +107,6 @@
     right: 0;
     z-index: 10;
     margin: 0 20px 16px;
-    padding: 4px;
     background: var(--surface);
     border: 2px solid var(--border);
     border-radius: 18px;
@@ -115,10 +114,6 @@
     transition: border-color 0.2s;
     display: flex;
     flex-direction: column;
-}
-
-.chat-input-box:focus-within {
-    border-color: var(--text-primary);
 }
 
 .chat-input-box textarea {
@@ -134,12 +129,60 @@
     color: var(--text);
     background: transparent;
     border: none;
+    border-top: 1px solid var(--border);
+    transition: border-color 0.2s;
     outline: none;
+}
+
+.chat-input-box:focus-within, .chat-input-box textarea:focus {
+    border-color: var(--text-primary);
 }
 
 .chat-send-btn {
     align-self: end;
     margin: 0 8px 8px 0;
+}
+
+.chat-user-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.chat-user-switch {
+    padding: 2px 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+}
+
+.chat-user-switch:hover:not(:disabled) {
+    opacity: 1;
+    color: var(--text-primary);
+    background: var(--bg);
+}
+
+.conn-error {
+    font-size: 12px;
+    font-weight: bold;
+    color: var(--error);
+    text-align: end;
+}
+
+.message-sender {
+    margin-bottom: 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.message.is-own .message-sender {
+    text-align: end;
+    color: var(--text-primary);
 }
 
 @media (width < 820px) {
@@ -155,4 +198,56 @@
         left: 0;
         margin: 0 12px 12px;
     }
+}
+
+.login-screen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100svh;
+    width: 100%;
+}
+
+.login-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: min(360px, 90vw);
+    padding: 28px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+}
+
+.login-title {
+    margin: 0;
+    color: var(--text-primary);
+}
+
+.login-tip {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.login-input {
+    padding: 10px 12px;
+    font: inherit;
+    text-align: center;
+    color: var(--text);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.login-input:focus {
+    border-color: var(--text-primary);
+}
+
+.login-error {
+    margin: 0;
+    font-size: 13px;
+    color: var(--error);
 }
