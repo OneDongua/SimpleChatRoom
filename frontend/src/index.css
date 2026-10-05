@@ -40,6 +40,12 @@
     }
 }
 
+@media (width < 820px) {
+    :root {
+        --sidebar-width: 300px;
+    }
+}
+
 #root {
     max-width: 100%;
     margin: 0 auto;
@@ -53,6 +59,7 @@
 
 body {
     margin: 0;
+    font-family: "HarmonyOS Sans SC", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
 p {
@@ -78,7 +85,7 @@ code {
 }
 
 button {
-    padding: 8px 18px;
+    padding: 12px 18px;
     font-family: inherit;
     font-weight: 600;
     color: #fff;
@@ -96,4 +103,14 @@ button:hover:not(:disabled) {
 button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+html,
+body {
+    user-select: none;
+}
+
+input,
+textarea {
+    user-select: text;
 }

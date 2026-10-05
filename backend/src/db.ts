@@ -1,7 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { User } from '../../shared/types.ts';
+import type { ChatMessage, MessagePage, Room, RoomInfo, User } from '../../shared/types.ts';
+import { hashPassword } from './utils/password.ts';
 
 // 数据库固定放在 backend/data/chat.db：用 import.meta.dirname 解析绝对路径，
 // 不依赖启动时的 CWD（从任何目录启动 node/tsx 都指向同一个库）
@@ -19,7 +20,45 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE
   );
+
+  CREATE TABLE IF NOT EXISTS rooms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    is_public INTEGER NOT NULL,      -- 1 公共 / 0 私有
+    creator_id INTEGER NOT NULL,     -- 0 = 系统（播种房）
+    created_at INTEGER NOT NULL,     -- 毫秒
+    password_hash TEXT               -- scrypt 哈希；NULL = 无密码（公共房）
+  );
+
+  CREATE TABLE IF NOT EXISTS room_members (
+    room_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    joined_at INTEGER NOT NULL,
+    PRIMARY KEY (room_id, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id INTEGER NOT NULL,
+    sender_id INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    timestamp INTEGER NOT NULL
+  );
+
+  -- 历史消息查询热点：WHERE room_id = ? [AND id < ?] ORDER BY id DESC
+  -- room_id 前置等值过滤，id 紧随其后使反向扫描即可取最新页，免去排序
+  CREATE INDEX IF NOT EXISTS idx_messages_room_id_id ON messages (room_id, id);
 `);
+
+// 旧库的 rooms 表创建时还没有 password_hash 列（CREATE TABLE IF NOT EXISTS 不会补列），
+// 用 pragma 探测后 ALTER 补齐。必须在下面所有 prepare 之前完成，否则旧库 prepare 会因缺列抛错。
+const roomColumns = db.prepare("SELECT name FROM pragma_table_info('rooms')").all();
+if (!roomColumns.some((row) => row.name === 'password_hash')) {
+  db.exec('ALTER TABLE rooms ADD COLUMN password_hash TEXT');
+  // 仅测试数据：旧的私有房没有密码，统一回填为 0000（哈希存储），使私有房一律有密码
+  db.prepare('UPDATE rooms SET password_hash = ? WHERE is_public = 0 AND password_hash IS NULL')
+    .run(hashPassword('0000'));
+}
 
 // 数据库操作预编译语句（表创建之后才能 prepare）
 const selectById = db.prepare('SELECT id, username FROM users WHERE id = ?');
@@ -29,6 +68,44 @@ const selectByName = db.prepare('SELECT id, username FROM users WHERE username =
 const insertUser = db.prepare(
   'INSERT INTO users (username) VALUES (?) ON CONFLICT(username) DO NOTHING RETURNING id, username'
 );
+
+const countRooms = db.prepare('SELECT COUNT(*) AS c FROM rooms');
+const insertRoom = db.prepare(
+  'INSERT INTO rooms (name, is_public, creator_id, created_at, password_hash) VALUES (?, ?, ?, ?, ?)' +
+    ' RETURNING id, name, is_public, creator_id, created_at'
+);
+const selectRoomById = db.prepare(
+  'SELECT id, name, is_public, creator_id, created_at FROM rooms WHERE id = ?'
+);
+// 密码哈希只在服务端流转（校验用），绝不放进 Room/RoomInfo，避免随 API 响应或广播外泄
+const selectRoomPasswordHash = db.prepare('SELECT password_hash FROM rooms WHERE id = ?');
+// 公共房全部返回；私有房仅当该用户是成员（LEFT JOIN 只绑一个 ?）
+const selectRoomsForUser = db.prepare(`
+  SELECT r.id, r.name, r.is_public, r.creator_id, r.created_at,
+         (m.user_id IS NOT NULL) AS is_member
+  FROM rooms r
+  LEFT JOIN room_members m ON m.room_id = r.id AND m.user_id = ?
+  WHERE r.is_public = 1 OR m.user_id IS NOT NULL
+  ORDER BY r.is_public DESC, r.id ASC
+`);
+// 重复加入时被忽略、无行返回（.get() 为 undefined），据此判断是否真的新增了成员
+const insertMember = db.prepare(
+  'INSERT OR IGNORE INTO room_members (room_id, user_id, joined_at) VALUES (?, ?, ?) RETURNING room_id'
+);
+const selectMember = db.prepare('SELECT 1 AS ok FROM room_members WHERE room_id = ? AND user_id = ?');
+const insertMessage = db.prepare(
+  'INSERT INTO messages (room_id, sender_id, text, timestamp) VALUES (?, ?, ?, ?) RETURNING id'
+);
+const selectLatestMessages = db.prepare(`
+  SELECT m.id, m.room_id, m.sender_id, m.text, m.timestamp, u.username
+  FROM messages m JOIN users u ON u.id = m.sender_id
+  WHERE m.room_id = ? ORDER BY m.id DESC LIMIT ?
+`);
+const selectMessagesBefore = db.prepare(`
+  SELECT m.id, m.room_id, m.sender_id, m.text, m.timestamp, u.username
+  FROM messages m JOIN users u ON u.id = m.sender_id
+  WHERE m.room_id = ? AND m.id < ? ORDER BY m.id DESC LIMIT ?
+`);
 
 /**
  * 将 node:sqlite 返回的 null-prototype 记录转成普通 User 对象。
@@ -40,6 +117,60 @@ function toUser(row: unknown): User | undefined {
   const { id, username } = row as Record<string, unknown>;
   if (typeof id !== 'number' || typeof username !== 'string') return undefined;
   return { id, username };
+}
+
+/**
+ * 将 rooms 表的记录转成普通 Room 对象（snake_case -> camelCase，is_public 转 boolean）。
+ * @param row - 从数据库查询得到的未知类型记录。
+ * @returns 字段齐全时返回 {@link Room}，否则返回 undefined。
+ */
+function toRoom(row: unknown): Room | undefined {
+  if (typeof row !== 'object' || row === null) return undefined;
+  const { id, name, is_public, creator_id, created_at } = row as Record<string, unknown>;
+  if (
+    typeof id !== 'number' ||
+    typeof name !== 'string' ||
+    typeof is_public !== 'number' ||
+    typeof creator_id !== 'number' ||
+    typeof created_at !== 'number'
+  ) {
+    return undefined;
+  }
+  return { id, name, isPublic: is_public === 1, creatorId: creator_id, createdAt: created_at };
+}
+
+/**
+ * 将带 is_member 标记的 rooms 联查记录转成 {@link RoomInfo}。
+ * @param row - selectRoomsForUser 返回的未知类型记录。
+ * @returns 字段齐全时返回 RoomInfo，否则返回 undefined。
+ */
+function toRoomInfo(row: unknown): RoomInfo | undefined {
+  const room = toRoom(row);
+  if (!room) return undefined;
+  const { is_member } = row as Record<string, unknown>;
+  if (typeof is_member !== 'number') return undefined;
+  return { ...room, isMember: is_member === 1 };
+}
+
+/**
+ * 将 messages 联查 users 的记录转成 {@link ChatMessage}。
+ * @param row - 从数据库查询得到的未知类型记录。
+ * @returns 字段齐全时返回 ChatMessage，否则返回 undefined。
+ */
+function toMessage(row: unknown): ChatMessage | undefined {
+  if (typeof row !== 'object' || row === null) return undefined;
+  const { id, room_id, sender_id, text, timestamp, username } = row as Record<string, unknown>;
+  if (
+    typeof id !== 'number' ||
+    typeof room_id !== 'number' ||
+    typeof sender_id !== 'number' ||
+    typeof text !== 'string' ||
+    typeof timestamp !== 'number' ||
+    typeof username !== 'string'
+  ) {
+    return undefined;
+  }
+  return { id, roomId: room_id, senderId: sender_id, username, text, timestamp };
 }
 
 /**
@@ -78,3 +209,117 @@ export function findOrCreateUser(username: string): { user: User; created: boole
 
   throw new Error(`findOrCreateUser 失败: ${username}`); // 理论上不可达
 }
+
+/**
+ * 按主键 id 查询聊天室。
+ * @param id - 聊天室的主键 id。
+ * @returns 命中则返回 {@link Room}，未找到则返回 undefined。
+ */
+export function getRoomById(id: number): Room | undefined {
+  return toRoom(selectRoomById.get(id));
+}
+
+/**
+ * 查询房间密码哈希（仅供服务端校验使用，绝不进入 Room/RoomInfo 或 API 响应）。
+ * @param roomId - 房间 id。
+ * @returns 哈希字符串；房间无密码（公共房）或不存在时返回 null。
+ */
+export function getRoomPasswordHash(roomId: number): string | null {
+  const value = selectRoomPasswordHash.get(roomId)?.password_hash;
+  return typeof value === 'string' ? value : null;
+}
+
+/**
+ * 查询某用户可见的聊天室列表：公共房全部 + 私有房中该用户已加入的。
+ * @param userId - 查询者的用户 id。
+ * @returns 按（公共在前、id 升序）排序的 {@link RoomInfo} 数组。
+ */
+export function listRoomsForUser(userId: number): RoomInfo[] {
+  return selectRoomsForUser
+    .all(userId)
+    .map(toRoomInfo)
+    .filter((room): room is RoomInfo => room !== undefined);
+}
+
+/**
+ * 判断用户是否为聊天室成员。
+ * @returns 是成员返回 true，否则 false。
+ */
+export function isRoomMember(roomId: number, userId: number): boolean {
+  return selectMember.get(roomId, userId) !== undefined;
+}
+
+/**
+ * 创建聊天室；创建者自动成为成员（系统房 creatorId=0 除外）。两步写入包在事务里。
+ * @param passwordHash - 私有房的密码哈希；公共房传 null（默认）。
+ * @returns 新建的 {@link Room}。
+ */
+export function createRoom(
+  name: string,
+  isPublic: boolean,
+  creatorId: number,
+  passwordHash: string | null = null,
+): Room {
+  const now = Date.now();
+  db.exec('BEGIN');
+  try {
+    const room = toRoom(insertRoom.get(name, isPublic ? 1 : 0, creatorId, now, passwordHash));
+    if (!room) throw new Error('创建聊天室失败');
+    if (creatorId > 0) insertMember.run(room.id, creatorId, now);
+    db.exec('COMMIT');
+    return room;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+/**
+ * 写入成员关系（幂等，重复加入不报错也不重复写）。
+ * @returns true 表示本次真的新增了成员；false 表示之前已经是成员。
+ */
+export function addRoomMember(roomId: number, userId: number): boolean {
+  return insertMember.get(roomId, userId, Date.now()) !== undefined;
+}
+
+/**
+ * 把消息落库；username 使用调用方已鉴权的 User，不再查库。
+ * @returns 带库内 id 的完整 {@link ChatMessage}，可直接广播。
+ */
+export function saveMessage(roomId: number, sender: User, text: string): ChatMessage {
+  const timestamp = Date.now();
+  const row = insertMessage.get(roomId, sender.id, text, timestamp);
+  const id = typeof row?.id === 'number' ? row.id : undefined;
+  if (id === undefined) throw new Error('消息写入失败');
+  return { id, roomId, senderId: sender.id, username: sender.username, text, timestamp };
+}
+
+/**
+ * 按游标分页拉取历史消息（升序返回，可直接 prepend）。
+ * @param roomId - 房间 id。
+ * @param beforeId - 游标：只取 id 小于它的消息；null 表示取最新一页。
+ * @param limit - 单页条数上限（内部多取一条用于判断 hasMore）。
+ */
+export function listMessages(roomId: number, beforeId: number | null, limit: number): MessagePage {
+  const rows =
+    beforeId === null
+      ? selectLatestMessages.all(roomId, limit + 1)
+      : selectMessagesBefore.all(roomId, beforeId, limit + 1);
+  const hasMore = rows.length > limit;
+  const messages = (hasMore ? rows.slice(0, limit) : rows)
+    .map(toMessage)
+    .filter((message): message is ChatMessage => message !== undefined)
+    .reverse();
+  return { messages, hasMore };
+}
+
+/**
+ * 启动时若一个聊天室都没有，播种"公共大厅"（creator_id = 0 表示系统创建）。
+ */
+export function ensureDefaultRoom(): void {
+  const row = countRooms.get();
+  const count = typeof row?.c === 'number' ? row.c : 0;
+  if (count === 0) createRoom('公共大厅', true, 0);
+}
+
+ensureDefaultRoom();

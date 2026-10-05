@@ -1,18 +1,22 @@
 import type { FormEvent } from 'react';
-import { useEffect, useState } from 'react';
-import type { ChatMessage, User } from './socket/socket.ts';
-import { connectAs, socket } from './socket/socket.ts';
+import { useState } from 'react';
+import type { User } from './socket/socket.ts';
 import { login } from './api.ts';
+import { useChatSocket } from './hooks/useChatSocket.ts';
+import { useFormError } from './hooks/useFormError.ts';
+import Sidebar from './components/Sidebar.tsx';
+import MessageList from './components/MessageList.tsx';
+import ChatInput from './components/ChatInput.tsx';
 import './App.css';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
   const [username, setUsername] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
-  const [loginError, setLoginError] = useState('');
-  const [connError, setConnError] = useState('');
-  const [input, setInput] = useState('');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [loginError, setLoginError] = useFormError(); // 5 秒后自动消失
+  const [sidebarOpen, setSidebarOpen] = useState(false); // 移动端抽屉：是否展开聊天室列表
+
+  const chat = useChatSocket(user);
 
   // 登录：find-or-create，成功后进入聊天室
   const handleLogin = async (e: FormEvent) => {
@@ -22,10 +26,7 @@ function App() {
     setLoggingIn(true);
     setLoginError('');
     try {
-      const logged = await login(name);
-      setMessages([]); // 换用户后清空本地消息，避免"串台"
-      setConnError('');
-      setUser(logged);
+      setUser(await login(name));
     } catch (err) {
       setLoginError(err instanceof Error ? `登录失败: ${err.message}` : '登录失败，请重试');
     } finally {
@@ -33,45 +34,28 @@ function App() {
     }
   };
 
-  // 发送消息函数
-  const sendMessage = () => {
-    if (input) {
-      socket.emit('message', input.trim());
-      setInput('');
-    }
+  // 切换用户：清空聊天状态并回到登录界面（socket 由 hook 内 effect 的 cleanup 断开）
+  const switchUser = () => {
+    chat.reset();
+    setSidebarOpen(false);
+    setUser(null);
   };
 
-  // 登录后建立连接；未登录不连接（避免被服务端握手校验拒绝）
-  useEffect(() => {
-    if (!user) return;
+  // 移动端抽屉：选中/进入房间后自动收起（失败时由侧边栏表单展示错误，保持展开）
+  const handleSelectRoom = (roomId: number) => {
+    chat.selectRoom(roomId);
+    setSidebarOpen(false);
+  };
 
-    // 先挂监听再 connect，避免握手后立刻到达的消息丢失
-    const onMessage = (message: ChatMessage) => {
-      setMessages((prev) => [...prev, message]);
-    };
-    const onConnect = () => setConnError('');
-    const onConnectError = (err: Error) => {
-      console.error('socket 连接失败：', err.message);
-      setConnError(`连接失败：${err.message}`);
-    };
-    socket.on('message', onMessage);
-    socket.on('connect', onConnect);
-    socket.on('connect_error', onConnectError);
-    connectAs(user.id);
+  const handleCreateRoom = async (name: string, isPublic: boolean, password?: string) => {
+    await chat.createRoomAndEnter(name, isPublic, password);
+    setSidebarOpen(false);
+  };
 
-    return () => {
-      socket.off('message', onMessage);
-      socket.off('connect', onConnect);
-      socket.off('connect_error', onConnectError);
-      socket.disconnect();
-    };
-  }, [user]);
-
-  // 收到新消息后滚动到底部
-  useEffect(() => {
-    if (!user || messages.length === 0) return;
-    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
-  }, [user, messages]);
+  const handleJoinRoom = async (roomId: number, password?: string) => {
+    await chat.joinRoomById(roomId, password);
+    setSidebarOpen(false);
+  };
 
   // 未登录：登录界面
   if (!user) {
@@ -99,75 +83,60 @@ function App() {
 
   return (
     <>
-      <aside className="sidebar">
+      <Sidebar
+        open={sidebarOpen}
+        rooms={chat.rooms}
+        currentRoomId={chat.currentRoomId}
+        onSelectRoom={handleSelectRoom}
+        onCreateRoom={handleCreateRoom}
+        onJoinRoom={handleJoinRoom}
+      />
 
-        <a className="brand" href="#">
-          <svg className="brand-icon" xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960"
-               width="24px" fill="var(--text-primary)">
-            <path
-              d="M80-80v-720q0-33 23.5-56.5T160-880h640q33 0 56.5 23.5T880-800v480q0 33-23.5 56.5T800-240H240L80-80Zm160-320h320v-80H240v80Zm0-120h480v-80H240v80Zm0-120h480v-80H240v80Z"/>
-          </svg>
-          <h3>
-            聊天室
-          </h3>
-        </a>
-
-        <div className="list-item-container">
-          <a className="list-item">Chat 1</a>
-        </div>
-
-      </aside>
+      <div
+        className={`sidebar-backdrop${sidebarOpen ? ' is-open' : ''}`}
+        aria-hidden="true"
+        onClick={() => setSidebarOpen(false)}/>
 
       <div className="chat-room">
 
-        <div className="message-list">
-          {messages.map((message, index) => (
-            <div
-              key={`${message.timestamp}-${index}`}
-              className={message.senderId === user.id ? 'message is-own' : 'message is-other'}
-            >
-              <div className="message-sender">
-                {message.senderId === user.id ? '我' : message.username}
-              </div>
-              {message.text}
-            </div>
-          ))}
+        {/* 未进房时没有标题，桌面端整条隐藏，移动端保留菜单按钮入口 */}
+        <div className={`chat-header${chat.currentRoom ? '' : ' is-empty'}`}>
+          <button
+            className="mobile-menu-btn"
+            type="button"
+            aria-label="打开聊天室列表"
+            onClick={() => setSidebarOpen(true)}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px"
+                 fill="var(--text)">
+              <path
+                d="M160-240q-17 0-28.5-11.5T120-280q0-17 11.5-28.5T160-320h640q17 0 28.5 11.5T840-280q0 17-11.5 28.5T800-240H160Zm0-200q-17 0-28.5-11.5T120-480q0-17 11.5-28.5T160-520h640q17 0 28.5 11.5T840-480q0 17-11.5 28.5T800-440H160Zm0-200q-17 0-28.5-11.5T120-680q0-17 11.5-28.5T160-720h640q17 0 28.5 11.5T840-680q0 17-11.5 28.5T800-640H160Z"/>
+            </svg>
+          </button>
+          {chat.currentRoom && <span className="chat-header-title">{chat.currentRoom.name}</span>}
         </div>
 
-        <div className="chat-input-box">
-          <div className="chat-user-bar">
-            <div>
-              <span>以 {user.username} 身份发言 ·</span>
-              <button
-                className="chat-user-switch"
-                type="button"
-                onClick={() => {
-                  setMessages([]);
-                  setUser(null);
-                }}
-              >
-                切换用户
-              </button>
-            </div>
-            {connError && <div className="conn-error">{connError}</div>}
-          </div>
-          <textarea
-            value={input}
-            onChange={(e) =>
-              setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.ctrlKey && e.key === 'Enter') {
-                e.preventDefault();
-                sendMessage();
-              }
-            }}/>
-          <button
-            className="chat-send-btn"
-            disabled={!input}
-            onClick={sendMessage}>
-            发送
-          </button>
-        </div>
+        {chat.currentRoomId === null ? (
+          <div className="empty-state">选择或创建一个聊天室开始聊天</div>
+        ) : (
+          <MessageList
+            key={chat.currentRoomId}
+            myId={user.id}
+            messages={chat.messages}
+            hasMore={chat.hasMore}
+            loadingOlder={chat.loadingOlder}
+            onLoadOlder={chat.loadOlder}
+          />
+        )}
+
+        <ChatInput
+          username={user.username}
+          disabled={chat.currentRoomId === null}
+          connError={chat.connError}
+          roomError={chat.roomError}
+          onSend={chat.sendMessage}
+          onSwitchUser={switchUser}
+        />
 
       </div>
     </>

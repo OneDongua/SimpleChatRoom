@@ -1,0 +1,5 @@
+# macOS
+.DS_Store
+
+# CodeGraph 索引（本地生成，不入库）
+.codegraph/

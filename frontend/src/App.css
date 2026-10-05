@@ -6,7 +6,39 @@
     padding: 28px 20px 20px;
     position: fixed;
     inset: 0 auto 0 0;
-    overflow-y: auto
+    overflow-y: auto;
+    transition: transform 0.25s ease;
+}
+
+.sidebar-backdrop {
+    display: block;
+    visibility: hidden;
+    position: fixed;
+    inset: 0;
+    z-index: 15;
+    background: rgba(0, 0, 0, 0.45);
+    opacity: 0;
+    transition: opacity 0.2s, visibility 0s linear 0.2s;
+}
+
+.sidebar-backdrop.is-open {
+    visibility: visible;
+    opacity: 1;
+    transition: opacity 0.2s, visibility 0s;
+}
+
+.mobile-menu-btn {
+    display: none;
+    padding: 4px;
+    background: none;
+    border-radius: 50%;
+    transition: background-color 0.2s;
+    align-items: center;
+    justify-content: center;
+}
+
+.mobile-menu-btn:hover {
+    background: rgba(0, 0, 0, 0.1);
 }
 
 .brand {
@@ -55,7 +87,7 @@
 
 .chat-room {
     margin-left: var(--sidebar-width);
-    height: 100vh;
+    min-height: 100vh;
     padding-bottom: 200px;
 }
 
@@ -78,6 +110,7 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     animation: message-in 0.18s ease-out;
+    user-select: text;
 }
 
 .message.is-other {
@@ -181,22 +214,35 @@
 }
 
 .message.is-own .message-sender {
-    text-align: end;
     color: var(--text-primary);
 }
 
 @media (width < 820px) {
     .sidebar {
-        display: none;
+        transform: translateX(-100%);
+    }
+
+    .sidebar.is-open {
+        transform: translateX(0);
+    }
+
+    .mobile-menu-btn {
+        display: flex;
     }
 
     .chat-room {
         margin-left: 0;
+        padding-bottom: 160px;
     }
 
     .chat-input-box {
         left: 0;
         margin: 0 12px 12px;
+    }
+
+    .chat-input-box textarea {
+        min-height: 70px;
+        max-height: 120px;
     }
 }
 
@@ -250,4 +296,242 @@
     margin: 0;
     font-size: 13px;
     color: var(--error);
+    animation: form-error-in-out 5s ease-out forwards;
+}
+
+/* 表单错误提示动画（登录 + 侧边栏创建/加入共用）
+   总时长与 useFormError 的 5s 自动清除计时一致（略早淡出，避免卸载时突兀消失） */
+@keyframes form-error-in-out {
+    from {
+        opacity: 0;
+        transform: translateX(-10px);
+    }
+
+    6%,
+    90% {
+        opacity: 1;
+        transform: translateX(0);
+    }
+
+    to {
+        opacity: 0;
+        transform: translateX(16px);
+    }
+}
+
+/* ---- 聊天室列表（侧边栏） ---- */
+
+.room-create-btn {
+    width: 100%;
+    margin-top: 16px;
+    transition: border-radius 0.15s;
+}
+
+.room-create-btn.is-expanded {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.room-create-form {
+    display: none;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 16px 16px;
+    animation: fadeInDown 0.2s ease-out forwards;
+}
+
+.room-create-form.is-expanded {
+    display: flex;
+}
+
+@keyframes fadeInDown {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.room-join-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.room-form-row {
+    display: flex;
+    gap: 6px;
+}
+
+.room-form-row input {
+    flex: 1;
+    min-width: 0;
+}
+
+.room-form-row button {
+    flex: none;
+    padding: 8px 12px;
+    font-size: 13px;
+    border-radius: 12px;
+}
+
+.room-join-password-row {
+    display: none;
+}
+
+.room-join-password-row.is-expanded {
+    display: flex;
+    animation: fadeInDown 0.2s ease-out forwards;
+}
+
+.room-visibility {
+    flex: 1;
+    min-width: 0;
+    padding: 0 8px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    outline: none;
+}
+
+.room-form-error {
+    font-size: 12px;
+    color: var(--error);
+    text-align: left;
+    animation: form-error-in-out 5s ease-out forwards;
+}
+
+.room-input {
+    padding: 10px 12px;
+    font: inherit;
+    font-size: 14px;
+    text-align: center;
+    color: var(--text);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.room-input:focus {
+    border-color: var(--text-primary);
+}
+
+.room-group-title {
+    margin: 14px 5px 0;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    color: var(--text-secondary);
+    text-align: left;
+}
+
+.room-empty {
+    padding: 4px 15px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-align: left;
+}
+
+/* 房间行用 <button> 实现，覆盖 index.css 的全局 button 样式 */
+button.list-item {
+    width: 100%;
+    background: transparent;
+    text-align: left;
+}
+
+button.list-item.is-active {
+    background: var(--primary);
+    color: var(--text-primary);
+}
+
+button.list-item:hover:not(.is-active) {
+    background: var(--bg);
+    color: var(--text);
+}
+
+.room-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.room-id {
+    flex: none;
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+button.list-item.is-active .room-id {
+    color: var(--text-primary);
+}
+
+/* ---- 聊天区 ---- */
+
+.chat-header {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 16px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+}
+
+.chat-header-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+}
+
+/* 未进房时头部只有菜单按钮：桌面端隐藏，移动端保留入口 */
+.chat-header.is-empty {
+    display: none;
+}
+
+@media (width < 820px) {
+    .chat-header.is-empty {
+        display: flex;
+    }
+}
+
+.chat-header-id {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+/* 固定高度：文案切换不改变文档高度，避免污染 prepend 的高度差补偿 */
+.history-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 26px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 60vh;
+    font-size: 14px;
+    color: var(--text-secondary);
 }
