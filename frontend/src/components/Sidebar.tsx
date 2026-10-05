@@ -60,7 +60,7 @@ export default function Sidebar({
   const submitJoin = async (e: FormEvent) => {
     e.preventDefault();
     const id = Number(joinId.trim());
-    if (!Number.isInteger(id) || id < 0 || joining) return;
+    if (!Number.isInteger(id) || id <= 0 || joining) return;
     setJoining(true);
     setJoinError('');
     try {
