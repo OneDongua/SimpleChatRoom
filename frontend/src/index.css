@@ -32,11 +32,15 @@
 
 @media (prefers-color-scheme: dark) {
     :root {
-        --text: #9ca3af;
-        --bg: #16171d;
-        --border: #2e303a;
+        --text: #e5eaf3;
+        --text-primary: #6ea8d0;
+        --text-secondary: #8f97a8;
+        --bg: #131720;
+        --primary: #1e2941;
+        --surface: #1c2333;
+        --error: #e00;
+        --border: #434654;
         --code-bg: #1f2028;
-        --shadow: rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
     }
 }
 
