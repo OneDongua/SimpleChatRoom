@@ -46,7 +46,7 @@ export interface ChatApi {
  * 聊天室核心状态：房间列表、当前房间、消息与 socket 生命周期。
  * 登录后调用（user 为 null 时不做任何事），切换用户前调用 reset()。
  */
-export function useChatSocket(user: User | null): ChatApi {
+export function useChatSocket(user: User | null, token: string | null): ChatApi {
   const [rooms, setRooms] = useState<RoomInfo[]>([]);
   const [currentRoomId, setCurrentRoomId] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -74,7 +74,7 @@ export function useChatSocket(user: User | null): ChatApi {
   const loadLatest = useCallback(
     async (roomId: number, replace: boolean) => {
       if (!user) return;
-      const page = await fetchMessages(roomId, user.id, { limit: PAGE_SIZE });
+      const page = await fetchMessages(roomId, { limit: PAGE_SIZE });
       if (currentRoomIdRef.current !== roomId) return; // 期间已切房，丢弃
       if (replace) {
         setMessages(page.messages);
@@ -138,7 +138,7 @@ export function useChatSocket(user: User | null): ChatApi {
     socket.on('connect_error', onConnectError);
     socket.on('message', onMessage);
     socket.on('room:created', onRoomCreated);
-    connectAs(user.id);
+    if (token) connectAs(token);
 
     return () => {
       socket.off('connect', onConnect);
@@ -147,7 +147,7 @@ export function useChatSocket(user: User | null): ChatApi {
       socket.off('room:created', onRoomCreated);
       socket.disconnect();
     };
-  }, [user]);
+  }, [user, token]);
 
   // Effect B —— [user, currentRoomId]：切房时 leave 旧 / enter 新
   useEffect(() => {
@@ -165,7 +165,7 @@ export function useChatSocket(user: User | null): ChatApi {
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
-    listRooms(user.id)
+    listRooms()
       .then((list) => {
         if (!cancelled) setRooms(sortRooms(list));
       })
@@ -182,8 +182,8 @@ export function useChatSocket(user: User | null): ChatApi {
       if (!user) return;
       // 公共房不发送 password 字段（后端拒绝公共房带密码）；私有房漏传则后端 400
       const input = isPublic
-        ? { name, isPublic, userId: user.id }
-        : { name, isPublic, userId: user.id, password };
+        ? { name, isPublic }
+        : { name, isPublic, password };
       const room = await createRoom(input); // 失败即抛，由表单展示
       setRooms((prev) => upsertRoom(prev, room));
       selectRoom(room.id);
@@ -194,7 +194,7 @@ export function useChatSocket(user: User | null): ChatApi {
   const joinRoomById = useCallback(
     async (roomId: number, password?: string) => {
       if (!user) return;
-      const room = await joinRoom(roomId, user.id, password); // 私有房在此获得成员身份
+      const room = await joinRoom(roomId, password); // 私有房在此获得成员身份
       setRooms((prev) => upsertRoom(prev, room));
       selectRoom(room.id);
     },
@@ -217,7 +217,7 @@ export function useChatSocket(user: User | null): ChatApi {
     loadingOlderRef.current = true;
     setLoadingOlder(true);
     try {
-      const page = await fetchMessages(currentRoomId, user.id, { before, limit: PAGE_SIZE });
+      const page = await fetchMessages(currentRoomId, { before, limit: PAGE_SIZE });
       if (currentRoomIdRef.current !== currentRoomId) return; // 期间已切房
       if (page.messages.length > 0) setMessages((prev) => mergeById(page.messages, prev));
       setHasMore(page.hasMore);

@@ -16,39 +16,66 @@ export const db = new DatabaseSync(DB_PATH);
 
 // 创建表
 db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL UNIQUE
-  );
+    CREATE TABLE IF NOT EXISTS users
+    (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        username      TEXT    NOT NULL UNIQUE,
+        status        TEXT    NOT NULL DEFAULT 'registered',
+        password_hash TEXT,
+        created_at    INTEGER NOT NULL DEFAULT 0,
+        updated_at    INTEGER NOT NULL DEFAULT 0
+    );
 
-  CREATE TABLE IF NOT EXISTS rooms (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    is_public INTEGER NOT NULL,      -- 1 公共 / 0 私有
-    creator_id INTEGER NOT NULL,     -- 0 = 系统（播种房）
-    created_at INTEGER NOT NULL,     -- 毫秒
-    password_hash TEXT               -- scrypt 哈希；NULL = 无密码（公共房）
-  );
+    CREATE TABLE IF NOT EXISTS sessions
+    (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id    INTEGER NOT NULL,
+        token_hash TEXT    NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+    );
 
-  CREATE TABLE IF NOT EXISTS room_members (
-    room_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL,
-    joined_at INTEGER NOT NULL,
-    PRIMARY KEY (room_id, user_id)
-  );
+    CREATE TABLE IF NOT EXISTS rooms
+    (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        name          TEXT    NOT NULL,
+        is_public     INTEGER NOT NULL, -- 1 公共 / 0 私有
+        creator_id    INTEGER NOT NULL, -- 0 = 系统（播种房）
+        created_at    INTEGER NOT NULL, -- 毫秒
+        password_hash TEXT              -- scrypt 哈希；NULL = 无密码（公共房）
+    );
 
-  CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    room_id INTEGER NOT NULL,
-    sender_id INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    timestamp INTEGER NOT NULL
-  );
+    CREATE TABLE IF NOT EXISTS room_members
+    (
+        room_id   INTEGER NOT NULL,
+        user_id   INTEGER NOT NULL,
+        joined_at INTEGER NOT NULL,
+        PRIMARY KEY (room_id, user_id)
+    );
 
-  -- 历史消息查询热点：WHERE room_id = ? [AND id < ?] ORDER BY id DESC
-  -- room_id 前置等值过滤，id 紧随其后使反向扫描即可取最新页，免去排序
-  CREATE INDEX IF NOT EXISTS idx_messages_room_id_id ON messages (room_id, id);
+    CREATE TABLE IF NOT EXISTS messages
+    (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_id   INTEGER NOT NULL,
+        sender_id INTEGER NOT NULL,
+        text      TEXT    NOT NULL,
+        timestamp INTEGER NOT NULL
+    );
+
+    -- 历史消息查询热点：WHERE room_id = ? [AND id < ?] ORDER BY id DESC
+    -- room_id 前置等值过滤，id 紧随其后使反向扫描即可取最新页，免去排序
+    CREATE INDEX IF NOT EXISTS idx_messages_room_id_id ON messages (room_id, id);
 `);
+
+// 兼容已有数据库：CREATE TABLE IF NOT EXISTS 不会补列。
+const userColumns = db.prepare("SELECT name FROM pragma_table_info('users')").all();
+const userColumnNames = userColumns.map((row) => row.name);
+if (!userColumnNames.includes('status')) db.exec("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'registered'");
+if (!userColumnNames.includes('password_hash')) db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
+if (!userColumnNames.includes('created_at')) db.exec('ALTER TABLE users ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0');
+if (!userColumnNames.includes('updated_at')) db.exec('ALTER TABLE users ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0');
+const migrationNow = Date.now();
+db.prepare('UPDATE users SET created_at = CASE WHEN created_at = 0 THEN ? ELSE created_at END, updated_at = CASE WHEN updated_at = 0 THEN ? ELSE updated_at END').run(migrationNow, migrationNow);
 
 // 旧库的 rooms 表创建时还没有 password_hash 列（CREATE TABLE IF NOT EXISTS 不会补列），
 // 用 pragma 探测后 ALTER 补齐。必须在下面所有 prepare 之前完成，否则旧库 prepare 会因缺列抛错。
@@ -61,18 +88,26 @@ if (!roomColumns.some((row) => row.name === 'password_hash')) {
 }
 
 // 数据库操作预编译语句（表创建之后才能 prepare）
-const selectById = db.prepare('SELECT id, username FROM users WHERE id = ?');
-const selectByName = db.prepare('SELECT id, username FROM users WHERE username = ?');
+const selectById = db.prepare('SELECT id, username, status FROM users WHERE id = ?');
+const selectByName = db.prepare('SELECT id, username, status, password_hash FROM users WHERE username = ?');
 // 并发下两个请求同时插同名用户时，ON CONFLICT DO NOTHING 让后到的那条静默失败（不抛异常），
 // 配合下面的回退 SELECT 实现无竞态的 find-or-create
 const insertUser = db.prepare(
-  'INSERT INTO users (username) VALUES (?) ON CONFLICT(username) DO NOTHING RETURNING id, username'
+  "INSERT INTO users (username, status, created_at, updated_at) VALUES (?, 'anonymous', ?, ?) RETURNING id, username, status"
 );
+const insertRegisteredUser = db.prepare(
+  "INSERT INTO users (username, status, password_hash, created_at, updated_at) VALUES (?, 'registered', ?, ?, ?) RETURNING id, username, status"
+);
+const updateUserToRegistered = db.prepare(
+  "UPDATE users SET username = ?, status = 'registered', password_hash = ?, updated_at = ? WHERE id = ? AND status = 'anonymous' RETURNING id, username, status"
+);
+const insertSession = db.prepare('INSERT INTO sessions (user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?)');
+const selectSessionUser = db.prepare('SELECT u.id, u.username, u.status FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ?');
 
 const countRooms = db.prepare('SELECT COUNT(*) AS c FROM rooms');
 const insertRoom = db.prepare(
   'INSERT INTO rooms (name, is_public, creator_id, created_at, password_hash) VALUES (?, ?, ?, ?, ?)' +
-    ' RETURNING id, name, is_public, creator_id, created_at'
+  ' RETURNING id, name, is_public, creator_id, created_at'
 );
 const selectRoomById = db.prepare(
   'SELECT id, name, is_public, creator_id, created_at FROM rooms WHERE id = ?'
@@ -81,12 +116,17 @@ const selectRoomById = db.prepare(
 const selectRoomPasswordHash = db.prepare('SELECT password_hash FROM rooms WHERE id = ?');
 // 公共房全部返回；私有房仅当该用户是成员（LEFT JOIN 只绑一个 ?）
 const selectRoomsForUser = db.prepare(`
-  SELECT r.id, r.name, r.is_public, r.creator_id, r.created_at,
-         (m.user_id IS NOT NULL) AS is_member
-  FROM rooms r
-  LEFT JOIN room_members m ON m.room_id = r.id AND m.user_id = ?
-  WHERE r.is_public = 1 OR m.user_id IS NOT NULL
-  ORDER BY r.is_public DESC, r.id ASC
+    SELECT r.id,
+           r.name,
+           r.is_public,
+           r.creator_id,
+           r.created_at,
+           (m.user_id IS NOT NULL) AS is_member
+    FROM rooms r
+             LEFT JOIN room_members m ON m.room_id = r.id AND m.user_id = ?
+    WHERE r.is_public = 1
+       OR m.user_id IS NOT NULL
+    ORDER BY r.is_public DESC, r.id ASC
 `);
 // 重复加入时被忽略、无行返回（.get() 为 undefined），据此判断是否真的新增了成员
 const insertMember = db.prepare(
@@ -97,14 +137,21 @@ const insertMessage = db.prepare(
   'INSERT INTO messages (room_id, sender_id, text, timestamp) VALUES (?, ?, ?, ?) RETURNING id'
 );
 const selectLatestMessages = db.prepare(`
-  SELECT m.id, m.room_id, m.sender_id, m.text, m.timestamp, u.username
-  FROM messages m JOIN users u ON u.id = m.sender_id
-  WHERE m.room_id = ? ORDER BY m.id DESC LIMIT ?
+    SELECT m.id, m.room_id, m.sender_id, m.text, m.timestamp, u.username
+    FROM messages m
+             JOIN users u ON u.id = m.sender_id
+    WHERE m.room_id = ?
+    ORDER BY m.id DESC
+    LIMIT ?
 `);
 const selectMessagesBefore = db.prepare(`
-  SELECT m.id, m.room_id, m.sender_id, m.text, m.timestamp, u.username
-  FROM messages m JOIN users u ON u.id = m.sender_id
-  WHERE m.room_id = ? AND m.id < ? ORDER BY m.id DESC LIMIT ?
+    SELECT m.id, m.room_id, m.sender_id, m.text, m.timestamp, u.username
+    FROM messages m
+             JOIN users u ON u.id = m.sender_id
+    WHERE m.room_id = ?
+      AND m.id < ?
+    ORDER BY m.id DESC
+    LIMIT ?
 `);
 
 /**
@@ -114,9 +161,9 @@ const selectMessagesBefore = db.prepare(`
  */
 function toUser(row: unknown): User | undefined {
   if (typeof row !== 'object' || row === null) return undefined;
-  const { id, username } = row as Record<string, unknown>;
-  if (typeof id !== 'number' || typeof username !== 'string') return undefined;
-  return { id, username };
+  const { id, username, status } = row as Record<string, unknown>;
+  if (typeof id !== 'number' || typeof username !== 'string' || !['anonymous', 'registered', 'admin', 'banned'].includes(String(status))) return undefined;
+  return { id, username, status: status as User['status'] };
 }
 
 /**
@@ -192,22 +239,73 @@ export function findUserByUsername(username: string): User | undefined {
 }
 
 /**
- * 查找或创建的用户名：不存在则注册，存在则直接返回
- * @param username - 待查找或创建的用户名。
- * @returns 包含 user（查找或新建得到的 User 对象）与 created（true 表示本次新建，false 表示已存在）的对象。
+ * 按用户名查询用户及其密码哈希（供登录校验使用）。
+ * @param username - 用户的唯一用户名。
+ * @returns 命中则返回包含 user 和 passwordHash 的对象，未找到则返回 undefined。
  */
-export function findOrCreateUser(username: string): { user: User; created: boolean } {
-  const existing = findUserByUsername(username);
-  if (existing) return { user: existing, created: false };
+export function findUserCredentials(username: string): { user: User; passwordHash: string | null } | undefined {
+  const row = selectByName.get(username);
+  const user = toUser(row);
+  if (!user) return undefined;
+  const passwordHash = (row as Record<string, unknown>).password_hash;
+  return { user, passwordHash: typeof passwordHash === 'string' ? passwordHash : null };
+}
 
-  const inserted = toUser(insertUser.get(username));
-  if (inserted) return { user: inserted, created: true };
+/**
+ * 创建一个匿名用户并返回。
+ * @param username - 匿名用户的显示名称。
+ * @returns 新创建的 {@link User} 对象。
+ * @throws 若数据库插入失败则抛出错误。
+ */
+export function createAnonymousUser(username: string): User {
+  const now = Date.now();
+  const row = toUser(insertUser.get(username, now, now));
+  if (!row) throw new Error('创建匿名用户失败');
+  return row;
+}
 
-  // SELECT 与 INSERT 之间被并发请求抢先插入，回退再查一次
-  const raced = findUserByUsername(username);
-  if (raced) return { user: raced, created: false };
+/**
+ * 创建一个注册用户（带密码哈希）并返回。
+ * @param username - 用户的唯一用户名。
+ * @param passwordHash - 经过 scrypt 哈希的密码。
+ * @returns 新创建的 {@link User} 对象。
+ * @throws 若数据库插入失败则抛出错误。
+ */
+export function createRegisteredUser(username: string, passwordHash: string): User {
+  const now = Date.now();
+  const row = toUser(insertRegisteredUser.get(username, passwordHash, now, now));
+  if (!row) throw new Error('创建注册用户失败');
+  return row;
+}
 
-  throw new Error(`findOrCreateUser 失败: ${username}`); // 理论上不可达
+/**
+ * 将匿名用户升级为注册用户（更改用户名并设置密码哈希）。
+ * @param id - 匿名用户的主键 id。
+ * @param username - 升级后的新用户名。
+ * @param passwordHash - 经过 scrypt 哈希的密码。
+ * @returns 升级成功则返回更新后的 {@link User}，用户不存在或状态不是 anonymous 则返回 undefined。
+ */
+export function upgradeAnonymousUser(id: number, username: string, passwordHash: string): User | undefined {
+  return toUser(updateUserToRegistered.get(username, passwordHash, Date.now(), id));
+}
+
+/**
+ * 为用户会话写入一条 session 记录。
+ * @param userId - 会话所属用户的 id。
+ * @param tokenHash - 会话 token 的哈希值。
+ * @param expiresAt - 会话过期的毫秒时间戳。
+ */
+export function createSession(userId: number, tokenHash: string, expiresAt: number): void {
+  insertSession.run(userId, tokenHash, Date.now(), expiresAt);
+}
+
+/**
+ * 根据 token 哈希查找对应的有效会话用户。
+ * @param tokenHash - 会话 token 的哈希值。
+ * @returns 会话未过期则返回对应的 {@link User}，否则返回 undefined。
+ */
+export function findUserByTokenHash(tokenHash: string): User | undefined {
+  return toUser(selectSessionUser.get(tokenHash, Date.now()));
 }
 
 /**
@@ -251,6 +349,9 @@ export function isRoomMember(roomId: number, userId: number): boolean {
 
 /**
  * 创建聊天室；创建者自动成为成员（系统房 creatorId=0 除外）。两步写入包在事务里。
+ * @param name - 聊天室名称。
+ * @param isPublic - 是否为公共房。
+ * @param creatorId - 创建者用户 id；0 表示系统播种房。
  * @param passwordHash - 私有房的密码哈希；公共房传 null（默认）。
  * @returns 新建的 {@link Room}。
  */
@@ -276,6 +377,8 @@ export function createRoom(
 
 /**
  * 写入成员关系（幂等，重复加入不报错也不重复写）。
+ * @param roomId - 目标聊天室 id。
+ * @param userId - 要加入的用户 id。
  * @returns true 表示本次真的新增了成员；false 表示之前已经是成员。
  */
 export function addRoomMember(roomId: number, userId: number): boolean {
@@ -284,6 +387,9 @@ export function addRoomMember(roomId: number, userId: number): boolean {
 
 /**
  * 把消息落库；username 使用调用方已鉴权的 User，不再查库。
+ * @param roomId - 消息所在的房间 id。
+ * @param sender - 已鉴权的发送者 {@link User}。
+ * @param text - 消息正文。
  * @returns 带库内 id 的完整 {@link ChatMessage}，可直接广播。
  */
 export function saveMessage(roomId: number, sender: User, text: string): ChatMessage {

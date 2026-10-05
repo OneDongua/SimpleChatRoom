@@ -1,5 +1,4 @@
-import type { FormEvent } from 'react';
-import { useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 import type { RoomInfo } from '../socket/socket.ts';
 import { useFormError } from '../hooks/useFormError.ts';
 
@@ -11,10 +10,19 @@ interface Props {
   onSelectRoom: (roomId: number) => void;
   onCreateRoom: (name: string, isPublic: boolean, password?: string) => Promise<void>;
   onJoinRoom: (roomId: number, password?: string) => Promise<void>;
+  canCreatePublic: boolean;
 }
 
 /** 侧边栏：品牌 + 创建/加入入口 + 公共/私有房间列表 */
-export default function Sidebar({ open, rooms, currentRoomId, onSelectRoom, onCreateRoom, onJoinRoom }: Props) {
+export default function Sidebar({
+                                  open,
+                                  rooms,
+                                  currentRoomId,
+                                  onSelectRoom,
+                                  onCreateRoom,
+                                  onJoinRoom,
+                                  canCreatePublic
+                                }: Props) {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [newIsPublic, setNewIsPublic] = useState(true);
@@ -26,6 +34,7 @@ export default function Sidebar({ open, rooms, currentRoomId, onSelectRoom, onCr
   const [joinFocused, setJoinFocused] = useState(false); // 聚焦加入表单时才展开密码行
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useFormError(); // 5 秒后自动消失
+  const joinInputRef = useRef<HTMLInputElement>(null);
 
   const submitCreate = async (e: FormEvent) => {
     e.preventDefault();
@@ -51,7 +60,7 @@ export default function Sidebar({ open, rooms, currentRoomId, onSelectRoom, onCr
   const submitJoin = async (e: FormEvent) => {
     e.preventDefault();
     const id = Number(joinId.trim());
-    if (!Number.isInteger(id) || id <= 0 || joining) return;
+    if (!Number.isInteger(id) || id < 0 || joining) return;
     setJoining(true);
     setJoinError('');
     try {
@@ -68,6 +77,10 @@ export default function Sidebar({ open, rooms, currentRoomId, onSelectRoom, onCr
 
   const publicRooms = rooms.filter((room) => room.isPublic);
   const privateRooms = rooms.filter((room) => !room.isPublic);
+
+  useEffect(() => {
+    if (joinError) joinInputRef.current?.focus();
+  }, [joinError]);
 
   return (
     <aside className={`sidebar${open ? ' is-open' : ''}`}>
@@ -87,6 +100,7 @@ export default function Sidebar({ open, rooms, currentRoomId, onSelectRoom, onCr
         className={`room-create-btn${showCreate ? ' is-expanded' : ''}`}
         onClick={() => {
           setShowCreate((v) => !v);
+          if (!canCreatePublic) setNewIsPublic(false);
           setCreateError('');
         }}
       >
@@ -120,7 +134,7 @@ export default function Sidebar({ open, rooms, currentRoomId, onSelectRoom, onCr
             data-testid="room-visibility"
             onChange={(e) => setNewIsPublic(e.target.value === 'public')}
           >
-            <option value="public">公共</option>
+            {canCreatePublic && <option value="public">公共</option>}
             <option value="private">私有</option>
           </select>
           <button
@@ -150,6 +164,7 @@ export default function Sidebar({ open, rooms, currentRoomId, onSelectRoom, onCr
             inputMode="numeric"
             placeholder="输入房间 ID 加入"
             data-testid="room-join-input"
+            ref={joinInputRef}
             onChange={(e) => setJoinId(e.target.value)}
           />
           <button type="submit" disabled={!joinId.trim() || joining} data-testid="room-join-submit">

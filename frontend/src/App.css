@@ -207,6 +207,21 @@
     text-align: end;
 }
 
+.chat-input-bg-mask {
+    position: fixed;
+    bottom: 0;
+    left: var(--sidebar-width);
+    right: 0;
+    z-index: 0;
+    width: 100%;
+    height: 200px;
+    background: linear-gradient(
+            to bottom,
+            transparent 0%,
+            var(--bg) 80%
+    );
+}
+
 .message-sender {
     margin-bottom: 4px;
     font-size: 12px;
@@ -233,6 +248,11 @@
     .chat-room {
         margin-left: 0;
         padding-bottom: 160px;
+    }
+
+    .chat-input-bg-mask {
+        left: 0;
+        height: 160px;
     }
 
     .chat-input-box {
@@ -276,6 +296,63 @@
     color: var(--text-secondary);
 }
 
+.auth-tabs {
+    position: relative;
+    display: flex;
+    padding: 4px;
+    margin-bottom: 4px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+}
+
+.auth-tabs-slider {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    left: 4px;
+    width: calc((100% - 8px) / 2);
+    background: var(--text-primary);
+    border-radius: 999px;
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.auth-tabs-slider.is-right {
+    transform: translateX(100%);
+}
+
+.auth-tabs button,
+.login-register-link {
+    border: 0;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.auth-tabs button {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    padding: 8px;
+    border-radius: 999px;
+    transition: color 0.28s ease;
+}
+
+.auth-tabs button.is-active {
+    color: var(--surface);
+}
+
+.login-form > form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.login-register-link {
+    align-self: flex-end;
+    padding: 0;
+    font-size: 12px;
+}
+
 .login-input {
     padding: 10px 12px;
     font: inherit;
@@ -308,7 +385,7 @@
     }
 
     6%,
-    90% {
+    94% {
         opacity: 1;
         transform: translateX(0);
     }

@@ -3,9 +3,17 @@
 // 打包时会被完全擦除，Vite 无需处理 src 之外的模块。
 
 /** 用户（对应数据库 users 表的一行） */
+export type UserStatus = 'anonymous' | 'registered' | 'admin' | 'banned';
+
 export interface User {
   id: number;
   username: string;
+  status: UserStatus;
+}
+
+export interface AuthResponse {
+  user: User;
+  token: string;
 }
 
 /** REST 接口的错误响应体 */

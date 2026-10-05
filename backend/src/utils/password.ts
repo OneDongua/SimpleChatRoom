@@ -15,7 +15,7 @@ const MAX_P = 16;
 
 /**
  * 生成密码哈希，格式 scrypt$<N>$<r>$<p>$<saltHex>$<hashHex>。
- * 每次调用生成随机盐，同一密码在不同房间的哈希互不相同。
+ * 每次调用生成随机盐，同一密码哈希互不相同。
  * @param plain - 明文密码（原样哈希，不 trim——空格也是合法密码字符）。
  */
 export function hashPassword(plain: string): string {

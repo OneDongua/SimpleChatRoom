@@ -8,11 +8,11 @@ export type { ChatMessage, MessagePage, Room, RoomInfo, User } from '../../../sh
 export const SERVER_URL = `http://${window.location.hostname}:3000`;
 
 export const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(SERVER_URL, {
-  autoConnect: false, // 登录拿到 userId 后再手动连接
+  autoConnect: false, // 登录拿到 token 后再手动连接
 });
 
-/** 登录成功后调用：通过 handshake.auth 把用户 id 带给服务端 */
-export function connectAs(userId: number) {
-  socket.auth = { userId };
+/** 登录成功后调用：通过 handshake.auth 把 token 交给服务端校验 */
+export function connectAs(token: string) {
+  socket.auth = { token };
   socket.connect();
 }
