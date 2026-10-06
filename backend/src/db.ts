@@ -2,7 +2,6 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ChatMessage, MessagePage, Room, RoomInfo, User } from '../../shared/types.ts';
-import { hashPassword } from './utils/password.ts';
 
 // 数据库固定放在 backend/data/chat.db：用 import.meta.dirname 解析绝对路径，
 // 不依赖启动时的 CWD（从任何目录启动 node/tsx 都指向同一个库）
