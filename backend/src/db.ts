@@ -68,39 +68,6 @@ db.exec(`
     CREATE INDEX IF NOT EXISTS idx_messages_room_id_id ON messages (room_id, id);
 `);
 
-// 兼容已有数据库：CREATE TABLE IF NOT EXISTS 不会补列。
-const userColumns = db.prepare("SELECT name FROM pragma_table_info('users')").all();
-const userColumnNames = userColumns.map((row) => row.name);
-if (!userColumnNames.includes('status')) db.exec("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'registered'");
-if (!userColumnNames.includes('password_hash')) db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
-if (!userColumnNames.includes('created_at')) db.exec('ALTER TABLE users ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0');
-if (!userColumnNames.includes('updated_at')) db.exec('ALTER TABLE users ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0');
-const migrationNow = Date.now();
-db.prepare('UPDATE users SET created_at = CASE WHEN created_at = 0 THEN ? ELSE created_at END, updated_at = CASE WHEN updated_at = 0 THEN ? ELSE updated_at END').run(migrationNow, migrationNow);
-
-// 旧库的 rooms 表创建时还没有 password_hash 列（CREATE TABLE IF NOT EXISTS 不会补列），
-// 用 pragma 探测后 ALTER 补齐。必须在下面所有 prepare 之前完成，否则旧库 prepare 会因缺列抛错。
-const roomColumns = db.prepare("SELECT name FROM pragma_table_info('rooms')").all();
-if (!roomColumns.some((row) => row.name === 'password_hash')) {
-  db.exec('ALTER TABLE rooms ADD COLUMN password_hash TEXT');
-  // 仅测试数据：旧的私有房没有密码，统一回填为 0000（哈希存储），使私有房一律有密码
-  db.prepare('UPDATE rooms SET password_hash = ? WHERE is_public = 0 AND password_hash IS NULL')
-    .run(hashPassword('0000'));
-}
-
-// 未读功能：room_members 增加"最后已读消息 id"，同样先探测再补列。
-// 回填必须放在建列这一次的分支里：仅测试数据、把已有历史消息全部视为已读，
-// 避免升级后所有房间满屏未读；若每次启动都跑回填则会抹掉已持久化的未读数。
-const memberColumns = db.prepare("SELECT name FROM pragma_table_info('room_members')").all();
-if (!memberColumns.some((row) => row.name === 'last_read_message_id')) {
-  db.exec('ALTER TABLE room_members ADD COLUMN last_read_message_id INTEGER NOT NULL DEFAULT 0');
-  db.exec(`
-      UPDATE room_members
-      SET last_read_message_id =
-          (SELECT COALESCE(MAX(id), 0) FROM messages WHERE messages.room_id = room_members.room_id)
-  `);
-}
-
 // 数据库操作预编译语句（表创建之后才能 prepare）
 const selectById = db.prepare('SELECT id, username, status FROM users WHERE id = ?');
 const selectByName = db.prepare('SELECT id, username, status, password_hash FROM users WHERE username = ?');
