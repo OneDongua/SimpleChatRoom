@@ -66,7 +66,7 @@
     color: var(--text-secondary);
     border-radius: 16px;
     align-items: center;
-    gap: 11px;
+    gap: 4px;
     padding: 10px 15px;
     font-size: 13px;
     font-weight: 600;
@@ -555,6 +555,22 @@ button.list-item:hover:not(.is-active) {
 
 button.list-item.is-active .room-id {
     color: var(--text-primary);
+}
+
+.room-unread {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--error);
+    color: var(--surface);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
 }
 
 /* ---- 聊天区 ---- */

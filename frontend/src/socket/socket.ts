@@ -2,7 +2,7 @@ import { io } from 'socket.io-client';
 import type { Socket } from 'socket.io-client';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../../shared/types.ts';
 
-export type { ChatMessage, MessagePage, Room, RoomInfo, User } from '../../../shared/types.ts';
+export type { ChatMessage, MessagePage, Room, RoomInfo, UnreadUpdate, User } from '../../../shared/types.ts';
 
 /** 后端地址：api.ts 复用同一常量，避免两处硬编码 */
 export const SERVER_URL = `http://${window.location.hostname}:3000`;

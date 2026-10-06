@@ -20,6 +20,8 @@ import {
   isRoomMember,
   listMessages,
   listRoomsForUser,
+  listUnreadCounts,
+  markRoomRead,
   saveMessage,
 } from './db.ts';
 import { hashPassword, verifyPassword } from './utils/password.ts';
@@ -55,6 +57,30 @@ function readPositiveInt(value: unknown): number | undefined {
 
 /** socket.io 频道名：消息只广播给频道内（即房内）的连接 */
 const roomChannel = (roomId: number) => `room:${roomId}`;
+
+/** socket.io 频道名：每个用户一个频道（该用户所有标签页的连接都在里面），用于同步未读数 */
+const userChannel = (userId: number) => `user:${userId}`;
+
+/**
+ * 房间落新消息后同步未读数：频道内（正在看该房）的成员先把已读位推进到最新，
+ * 再给每个成员推送其真实未读数（在看的人算出来自然是 0）。
+ * 不阻塞消息 ack，失败只记日志。
+ * @param channel - 房间频道名（room:<id>）。
+ * @param roomId - 房间 id。
+ */
+async function notifyUnread(channel: string, roomId: number): Promise<void> {
+  try {
+    // 单机模式下 fetchSockets 返回的就是本进程的真实 Socket，data 即握手时写入的 SocketData
+    const sockets = await io.in(channel).fetchSockets();
+    const present = new Set(sockets.map((s) => s.data.user.id));
+    for (const userId of present) markRoomRead(roomId, userId);
+    for (const { userId, unreadCount } of listUnreadCounts(roomId)) {
+      io.to(userChannel(userId)).emit('unread', { roomId, unreadCount });
+    }
+  } catch (err) {
+    console.error('未读数广播失败', err);
+  }
+}
 
 // CORS 必须放在 express.json() 之前：保证后面解析/校验失败返回的 400 也带上 CORS 头，
 // 否则浏览器端只能看到 "Failed to fetch"，看不到真正的错误信息
@@ -240,7 +266,7 @@ app.post('/api/rooms', (req, res) => {
   }
   const room = createRoom(name, body.isPublic, user.id, passwordHash);
   if (room.isPublic) io.emit('room:created', room); // 私有房不广播，只有创建者知道
-  res.status(201).json({ ...room, isMember: true });
+  res.status(201).json({ ...room, isMember: true, unreadCount: 0 }); // 新房无消息，未读恒 0
 });
 
 // 当前用户可见的聊天室：公共房全部 + 私有房中已加入的
@@ -282,7 +308,8 @@ app.post('/api/rooms/:id/join', (req, res) => {
     }
   }
   addRoomMember(room.id, user.id);
-  res.json({ ...room, isMember: true });
+  // 前端 join 后必然紧接进房（room:enter 会清零并校正），这里的 0 只是过渡值
+  res.json({ ...room, isMember: true, unreadCount: 0 });
 });
 
 // 历史消息（游标分页：before = 上一页第一条的 id；升序返回）
@@ -352,6 +379,7 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
   const user = socket.data.user;
   console.log(`connected: ${user.username}(${user.id})`);
+  socket.join(userChannel(user.id)); // 未读数按用户维度推送（覆盖其所有标签页）
 
   // 进入房间：加入 socket.io 频道；公共房顺手记录成员，私有房必须是已有成员
   socket.on('room:enter', (roomId, ack) => {
@@ -368,7 +396,10 @@ io.on('connection', (socket) => {
       }
       socket.join(roomChannel(room.id));
       addRoomMember(room.id, user.id); // 进入即记录成员（幂等；私有房在此为 no-op）
-      ack({ ok: true, room: { ...room, isMember: true } });
+      markRoomRead(room.id, user.id); // 必须在 addRoomMember 之后：进房即视为已读
+      // 该用户其它标签页同步清零；本标签页的 ack 也带回 0
+      io.to(userChannel(user.id)).emit('unread', { roomId: room.id, unreadCount: 0 });
+      ack({ ok: true, room: { ...room, isMember: true, unreadCount: 0 } });
     } catch (err) {
       console.error(err);
       ack({ ok: false, error: '服务器内部错误' });
@@ -416,6 +447,8 @@ io.on('connection', (socket) => {
       const message = saveMessage(room.id, user, body); // 先落库
       io.to(channel).emit('message', message); // 只发给房内（含发送者）
       ack?.({ ok: true });
+      // 后台同步未读数（内部先 mark 在看的人、再算数，房内成员算出来恒为 0），不阻塞 ack
+      void notifyUnread(channel, room.id);
     } catch (err) {
       console.error(err);
       ack?.({ ok: false, error: '服务器内部错误' });

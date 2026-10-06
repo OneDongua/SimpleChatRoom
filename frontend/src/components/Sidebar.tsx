@@ -197,6 +197,11 @@ export default function Sidebar({
             onClick={() => onSelectRoom(room.id)}
           >
             <span className="room-name">{room.name}</span>
+            {room.isMember && room.unreadCount > 0 && (
+              <span className="room-unread" title={`${room.unreadCount} 条未读`}>
+                {room.unreadCount > 99 ? '99+' : room.unreadCount}
+              </span>
+            )}
             <span className="room-id">#{room.id}</span>
           </button>
         ))}
@@ -215,6 +220,11 @@ export default function Sidebar({
                 onClick={() => onSelectRoom(room.id)}
               >
                 <span className="room-name">{room.name}</span>
+                {room.isMember && room.unreadCount > 0 && (
+                  <span className="room-unread" title={`${room.unreadCount} 条未读`}>
+                    {room.unreadCount > 99 ? '99+' : room.unreadCount}
+                  </span>
+                )}
                 <span className="room-id">#{room.id}</span>
               </button>
             ))}

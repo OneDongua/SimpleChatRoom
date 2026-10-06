@@ -37,6 +37,8 @@ export interface Room {
 export interface RoomInfo extends Room {
   /** 请求者是否已加入（进入过公共房或加入过私有房） */
   isMember: boolean;
+  /** 请求者在此房的未读数；非成员恒为 0 */
+  unreadCount: number;
 }
 
 // 前后端共用的聊天消息结构
@@ -80,12 +82,20 @@ export type EnterRoomResult =
   | { ok: true; room: RoomInfo }
   | { ok: false; error: string };
 
+/** 未读数变化推送（只发给该用户的所有标签页，见 user:<id> 频道） */
+export interface UnreadUpdate {
+  roomId: number;
+  unreadCount: number;
+}
+
 /** 服务端 -> 客户端 事件 */
 export interface ServerToClientEvents {
   /** 房间内新消息（已落库，只发给 room:<id> 频道内的人） */
   message: (message: ChatMessage) => void;
   /** 新公共聊天室创建成功（广播给全体在线用户；私有房不广播） */
   'room:created': (room: Room) => void;
+  /** 未读数变化：进房清零、不在看的房间来新消息累积 */
+  unread: (update: UnreadUpdate) => void;
 }
 
 /** 客户端 -> 服务端 事件 */

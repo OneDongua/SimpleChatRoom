@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ChatMessage, Room, RoomInfo, User } from '../socket/socket.ts';
+import type { ChatMessage, Room, RoomInfo, UnreadUpdate, User } from '../socket/socket.ts';
 import { connectAs, socket } from '../socket/socket.ts';
 import { createRoom, fetchMessages, joinRoom, listRooms } from '../api.ts';
 
@@ -68,6 +68,10 @@ export function useChatSocket(user: User | null, token: string | null): ChatApi 
     setLoadingOlder(false);
     loadingOlderRef.current = false;
     setRoomError('');
+    if (roomId !== null) {
+      // 进房即已读：本地立刻清零不等服务端（服务端在 room:enter 里落库并广播给其它标签页）
+      setRooms((prev) => prev.map((r) => (r.id === roomId ? { ...r, unreadCount: 0 } : r)));
+    }
   }, []);
 
   /** 拉最新一页：replace=true 用于进房；false 用于重连补齐（按 id 合并，不动 hasMore） */
@@ -115,11 +119,21 @@ export function useChatSocket(user: User | null, token: string | null): ChatApi 
   // Effect A —— 只依赖 [user]：连接 + 全部监听
   useEffect(() => {
     if (!user) return;
+    let disposed = false; // effect 卸载（切换用户）后丢弃在途的房间列表响应
 
     const onConnect = () => {
       setConnError('');
       const roomId = currentRoomIdRef.current;
       if (roomId !== null) enterRoomOnServerRef.current(roomId, false); // 首连/重连后重进房并补齐断线消息
+      // 断线期间的 unread 推送收不到，重连后重拉房间列表补齐；
+      // 当前房强制置 0：HTTP 快照可能早于 room:enter 的已读落库，避免把旧未读写回
+      void listRooms()
+        .then((list) => {
+          if (disposed) return;
+          const current = currentRoomIdRef.current;
+          setRooms(sortRooms(list.map((r) => (r.id === current ? { ...r, unreadCount: 0 } : r))));
+        })
+        .catch(() => {}); // 静默：保留旧列表，后续 unread 事件会继续更新
     };
     const onConnectError = (err: Error) => {
       console.error('socket 连接失败：', err.message);
@@ -130,7 +144,13 @@ export function useChatSocket(user: User | null, token: string | null): ChatApi 
       setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
     };
     const onRoomCreated = (room: Room) => {
-      setRooms((prev) => upsertRoom(prev, { ...room, isMember: room.creatorId === user.id }));
+      setRooms((prev) => upsertRoom(prev, { ...room, isMember: room.creatorId === user.id, unreadCount: 0 }));
+    };
+    const onUnread = (update: UnreadUpdate) => {
+      if (update.roomId === currentRoomIdRef.current) return; // 当前房恒已读（本地已清零），忽略
+      setRooms((prev) =>
+        prev.map((r) => (r.id === update.roomId ? { ...r, unreadCount: update.unreadCount } : r)),
+      );
     };
 
     // 先挂监听再 connect，避免握手后立刻到达的消息丢失
@@ -138,13 +158,16 @@ export function useChatSocket(user: User | null, token: string | null): ChatApi 
     socket.on('connect_error', onConnectError);
     socket.on('message', onMessage);
     socket.on('room:created', onRoomCreated);
+    socket.on('unread', onUnread);
     if (token) connectAs(token);
 
     return () => {
+      disposed = true;
       socket.off('connect', onConnect);
       socket.off('connect_error', onConnectError);
       socket.off('message', onMessage);
       socket.off('room:created', onRoomCreated);
+      socket.off('unread', onUnread);
       socket.disconnect();
     };
   }, [user, token]);

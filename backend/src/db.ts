@@ -47,9 +47,10 @@ db.exec(`
 
     CREATE TABLE IF NOT EXISTS room_members
     (
-        room_id   INTEGER NOT NULL,
-        user_id   INTEGER NOT NULL,
-        joined_at INTEGER NOT NULL,
+        room_id              INTEGER NOT NULL,
+        user_id              INTEGER NOT NULL,
+        joined_at            INTEGER NOT NULL,
+        last_read_message_id INTEGER NOT NULL DEFAULT 0, -- 成员已读到的最新消息 id（0 = 一条都未读）
         PRIMARY KEY (room_id, user_id)
     );
 
@@ -87,6 +88,19 @@ if (!roomColumns.some((row) => row.name === 'password_hash')) {
     .run(hashPassword('0000'));
 }
 
+// 未读功能：room_members 增加"最后已读消息 id"，同样先探测再补列。
+// 回填必须放在建列这一次的分支里：仅测试数据、把已有历史消息全部视为已读，
+// 避免升级后所有房间满屏未读；若每次启动都跑回填则会抹掉已持久化的未读数。
+const memberColumns = db.prepare("SELECT name FROM pragma_table_info('room_members')").all();
+if (!memberColumns.some((row) => row.name === 'last_read_message_id')) {
+  db.exec('ALTER TABLE room_members ADD COLUMN last_read_message_id INTEGER NOT NULL DEFAULT 0');
+  db.exec(`
+      UPDATE room_members
+      SET last_read_message_id =
+          (SELECT COALESCE(MAX(id), 0) FROM messages WHERE messages.room_id = room_members.room_id)
+  `);
+}
+
 // 数据库操作预编译语句（表创建之后才能 prepare）
 const selectById = db.prepare('SELECT id, username, status FROM users WHERE id = ?');
 const selectByName = db.prepare('SELECT id, username, status, password_hash FROM users WHERE username = ?');
@@ -114,14 +128,24 @@ const selectRoomById = db.prepare(
 );
 // 密码哈希只在服务端流转（校验用），绝不放进 Room/RoomInfo，避免随 API 响应或广播外泄
 const selectRoomPasswordHash = db.prepare('SELECT password_hash FROM rooms WHERE id = ?');
-// 公共房全部返回；私有房仅当该用户是成员（LEFT JOIN 只绑一个 ?）
+// 公共房全部返回；私有房仅当该用户是成员（LEFT JOIN 只绑一个 ?）。
+// unread_count：非成员恒 0；成员数其未读消息（id 大于已读位、且不是自己发的）。
+// 计数子查询关联 m.user_id 而不额外绑 ?，参数顺序与原语句保持一致。
 const selectRoomsForUser = db.prepare(`
     SELECT r.id,
            r.name,
            r.is_public,
            r.creator_id,
            r.created_at,
-           (m.user_id IS NOT NULL) AS is_member
+           (m.user_id IS NOT NULL) AS is_member,
+           CASE
+               WHEN m.user_id IS NULL THEN 0
+               ELSE (SELECT COUNT(*)
+                     FROM messages msg
+                     WHERE msg.room_id = r.id
+                       AND msg.id > m.last_read_message_id
+                       AND msg.sender_id != m.user_id)
+           END AS unread_count
     FROM rooms r
              LEFT JOIN room_members m ON m.room_id = r.id AND m.user_id = ?
     WHERE r.is_public = 1
@@ -133,6 +157,25 @@ const insertMember = db.prepare(
   'INSERT OR IGNORE INTO room_members (room_id, user_id, joined_at) VALUES (?, ?, ?) RETURNING room_id'
 );
 const selectMember = db.prepare('SELECT 1 AS ok FROM room_members WHERE room_id = ? AND user_id = ?');
+// 把已读位推进到该房当前最新消息；无消息时 COALESCE 保证写入 0 而非 NULL（列有 NOT NULL）。
+// 参数按 ? 文本顺序传：.run(roomId, roomId, userId)
+const updateMemberRead = db.prepare(`
+    UPDATE room_members
+    SET last_read_message_id = COALESCE((SELECT MAX(id) FROM messages WHERE room_id = ?), 0)
+    WHERE room_id = ?
+      AND user_id = ?
+`);
+// 该房每个成员的未读数（消息 id 大于已读位、且不是自己发的）；推送实时未读变化时一条 SQL 取全部成员
+const selectUnreadCounts = db.prepare(`
+    SELECT m.user_id,
+           (SELECT COUNT(*)
+            FROM messages msg
+            WHERE msg.room_id = m.room_id
+              AND msg.id > m.last_read_message_id
+              AND msg.sender_id != m.user_id) AS unread_count
+    FROM room_members m
+    WHERE m.room_id = ?
+`);
 const insertMessage = db.prepare(
   'INSERT INTO messages (room_id, sender_id, text, timestamp) VALUES (?, ?, ?, ?) RETURNING id'
 );
@@ -187,16 +230,16 @@ function toRoom(row: unknown): Room | undefined {
 }
 
 /**
- * 将带 is_member 标记的 rooms 联查记录转成 {@link RoomInfo}。
+ * 将带 is_member / unread_count 联查列的 rooms 记录转成 {@link RoomInfo}。
  * @param row - selectRoomsForUser 返回的未知类型记录。
  * @returns 字段齐全时返回 RoomInfo，否则返回 undefined。
  */
 function toRoomInfo(row: unknown): RoomInfo | undefined {
   const room = toRoom(row);
   if (!room) return undefined;
-  const { is_member } = row as Record<string, unknown>;
-  if (typeof is_member !== 'number') return undefined;
-  return { ...room, isMember: is_member === 1 };
+  const { is_member, unread_count } = row as Record<string, unknown>;
+  if (typeof is_member !== 'number' || typeof unread_count !== 'number') return undefined;
+  return { ...room, isMember: is_member === 1, unreadCount: unread_count };
 }
 
 /**
@@ -383,6 +426,32 @@ export function createRoom(
  */
 export function addRoomMember(roomId: number, userId: number): boolean {
   return insertMember.get(roomId, userId, Date.now()) !== undefined;
+}
+
+/**
+ * 把成员的最后已读位置推进到该房当前最新消息（进房、正在看该房时来新消息均调用）。
+ * 消息 id 自增，只会前进不会后退；非成员调用无效果。
+ * @param roomId - 目标聊天室 id。
+ * @param userId - 用户 id。
+ */
+export function markRoomRead(roomId: number, userId: number): void {
+  updateMemberRead.run(roomId, roomId, userId);
+}
+
+/**
+ * 列出该房每个成员的未读数，供实时推送用（一条 SQL 算出全部成员）。
+ * @param roomId - 目标聊天室 id。
+ * @returns 每个成员一条 { userId, unreadCount }。
+ */
+export function listUnreadCounts(roomId: number): { userId: number; unreadCount: number }[] {
+  return selectUnreadCounts
+    .all(roomId)
+    .map((row) => {
+      const { user_id, unread_count } = row as Record<string, unknown>;
+      if (typeof user_id !== 'number' || typeof unread_count !== 'number') return undefined;
+      return { userId: user_id, unreadCount: unread_count };
+    })
+    .filter((row): row is { userId: number; unreadCount: number } => row !== undefined);
 }
 
 /**
