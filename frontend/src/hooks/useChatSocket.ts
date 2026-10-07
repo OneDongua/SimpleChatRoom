@@ -116,7 +116,7 @@ export function useChatSocket(user: User | null, token: string | null): ChatApi 
     enterRoomOnServerRef.current = enterRoomOnServer;
   });
 
-  // Effect A —— 只依赖 [user]：连接 + 全部监听
+  // Effect A —— 只依赖 [user, token]：连接 + 全部监听
   useEffect(() => {
     if (!user) return;
     let disposed = false; // effect 卸载（切换用户）后丢弃在途的房间列表响应

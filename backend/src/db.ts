@@ -40,8 +40,8 @@ db.exec(`
         name          TEXT    NOT NULL,
         is_public     INTEGER NOT NULL, -- 1 公共 / 0 私有
         creator_id    INTEGER NOT NULL, -- 0 = 系统（播种房）
-        created_at    INTEGER NOT NULL, -- 毫秒
-        password_hash TEXT              -- scrypt 哈希；NULL = 无密码（公共房）
+        created_at    INTEGER NOT NULL,
+        password_hash TEXT
     );
 
     CREATE TABLE IF NOT EXISTS room_members
@@ -70,9 +70,7 @@ db.exec(`
 // 数据库操作预编译语句（表创建之后才能 prepare）
 const selectById = db.prepare('SELECT id, username, status FROM users WHERE id = ?');
 const selectByName = db.prepare('SELECT id, username, status, password_hash FROM users WHERE username = ?');
-// 并发下两个请求同时插同名用户时，ON CONFLICT DO NOTHING 让后到的那条静默失败（不抛异常），
-// 配合下面的回退 SELECT 实现无竞态的 find-or-create
-const insertUser = db.prepare(
+const insertAnonymousUser = db.prepare(
   "INSERT INTO users (username, status, created_at, updated_at) VALUES (?, 'anonymous', ?, ?) RETURNING id, username, status"
 );
 const insertRegisteredUser = db.prepare(
@@ -86,8 +84,7 @@ const selectSessionUser = db.prepare('SELECT u.id, u.username, u.status FROM ses
 
 const countRooms = db.prepare('SELECT COUNT(*) AS c FROM rooms');
 const insertRoom = db.prepare(
-  'INSERT INTO rooms (name, is_public, creator_id, created_at, password_hash) VALUES (?, ?, ?, ?, ?)' +
-  ' RETURNING id, name, is_public, creator_id, created_at'
+  'INSERT INTO rooms (name, is_public, creator_id, created_at, password_hash) VALUES (?, ?, ?, ?, ?) RETURNING id, name, is_public, creator_id, created_at'
 );
 const selectRoomById = db.prepare(
   'SELECT id, name, is_public, creator_id, created_at FROM rooms WHERE id = ?'
@@ -164,7 +161,7 @@ const selectMessagesBefore = db.prepare(`
 `);
 
 /**
- * 将 node:sqlite 返回的 null-prototype 记录转成普通 User 对象。
+ * 将 users 表的记录转成普通 User 对象。
  * @param row - 从数据库查询得到的未知类型记录，可能为 null 或非对象值。
  * @returns 若 row 包含合法的 id(number) 和 username(string)，返回对应的 {@link User} 对象；否则返回 undefined。
  */
@@ -268,9 +265,9 @@ export function findUserCredentials(username: string): { user: User; passwordHas
  */
 export function createAnonymousUser(username: string): User {
   const now = Date.now();
-  const row = toUser(insertUser.get(username, now, now));
-  if (!row) throw new Error('创建匿名用户失败');
-  return row;
+  const user = toUser(insertAnonymousUser.get(username, now, now));
+  if (!user) throw new Error('创建匿名用户失败');
+  return user;
 }
 
 /**
@@ -282,9 +279,9 @@ export function createAnonymousUser(username: string): User {
  */
 export function createRegisteredUser(username: string, passwordHash: string): User {
   const now = Date.now();
-  const row = toUser(insertRegisteredUser.get(username, passwordHash, now, now));
-  if (!row) throw new Error('创建注册用户失败');
-  return row;
+  const user = toUser(insertRegisteredUser.get(username, passwordHash, now, now));
+  if (!user) throw new Error('创建注册用户失败');
+  return user;
 }
 
 /**

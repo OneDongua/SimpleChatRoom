@@ -55,6 +55,7 @@ export function verifyPassword(plain: string, stored: string): boolean {
       p,
       maxmem: 128 * n * r * 2,
     });
+    // 使用 timingSafeEqual 防止时序攻击
     // timingSafeEqual 长度不等会抛 RangeError，先短路
     return actual.length === expected.length && timingSafeEqual(actual, expected);
   } catch {

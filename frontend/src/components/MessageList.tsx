@@ -63,21 +63,6 @@ export default function MessageList({ myId, messages, hasMore, loadingOlder, onL
   }, [messages]);
 
   // 移动端键盘弹出后自动滚到底部
-  /*useLayoutEffect(() => {
-    const viewport = window.visualViewport;
-    if (!viewport) return;
-
-    const doc = document.documentElement;
-    const scrollToBottom = () => {
-      window.scrollTo(0, doc.scrollHeight);
-    };
-
-    viewport.addEventListener("resize", scrollToBottom);
-
-    return () => {
-      viewport.removeEventListener("resize", scrollToBottom);
-    };
-  }, []);*/
   useLayoutEffect(() => {
     const viewport = window.visualViewport;
     if (!viewport) return;

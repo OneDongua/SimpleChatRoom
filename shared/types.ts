@@ -43,17 +43,13 @@ export interface RoomInfo extends Room {
 
 // 前后端共用的聊天消息结构
 export interface ChatMessage {
-  /** 库内主键：前端渲染 key、去重依据、翻页游标 */
   id: number;
-  /** 所属房间 id */
   roomId: number;
   /** 服务端生成的毫秒时间戳 */
   timestamp: number;
-  /** 发送方的用户 id */
   senderId: number;
   /** 发送方用户名，随消息冗余下发（服务端 JOIN users 得到） */
   username: string;
-  /** 消息文本 */
   text: string;
 }
 
@@ -61,7 +57,7 @@ export interface ChatMessage {
 export interface MessagePage {
   /** 按 id 升序（最旧在前），可直接 prepend 到列表头部 */
   messages: ChatMessage[];
-  /** 是否还有更早的消息（下一页游标 = 本页第一条的 id） */
+  /** 是否还有更早的消息 */
   hasMore: boolean;
 }
 
