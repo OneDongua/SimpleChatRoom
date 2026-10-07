@@ -60,7 +60,10 @@ export default function Sidebar({
   const submitJoin = async (e: FormEvent) => {
     e.preventDefault();
     const id = Number(joinId.trim());
-    if (!Number.isInteger(id) || id <= 0 || joining) return;
+    if (!Number.isInteger(id) || id <= 0 || joining) {
+      setJoinError('房间 ID 必须为大于 0 的数字')
+      return;
+    }
     setJoining(true);
     setJoinError('');
     try {
