@@ -120,7 +120,7 @@ const insertMember = db.prepare(
   'INSERT OR IGNORE INTO room_members (room_id, user_id, joined_at) VALUES (?, ?, ?) RETURNING room_id'
 );
 const selectMember = db.prepare('SELECT 1 AS ok FROM room_members WHERE room_id = ? AND user_id = ?');
-// 把已读位推进到该房当前最新消息；无消息时 COALESCE 保证写入 0 而非 NULL（列有 NOT NULL）。
+// 把已读位推进到该房当前最新消息；无消息时 COALESCE 保证写入 0 而非 NULL。
 // 参数按 ? 文本顺序传：.run(roomId, roomId, userId)
 const updateMemberRead = db.prepare(`
     UPDATE room_members

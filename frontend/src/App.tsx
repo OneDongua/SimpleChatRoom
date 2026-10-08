@@ -8,6 +8,7 @@ import Sidebar from './components/Sidebar.tsx';
 import MessageList from './components/MessageList.tsx';
 import ChatInput from './components/ChatInput.tsx';
 import './App.css';
+import type { AuthResponse } from '../../shared/types.ts';
 
 type AuthTab = 'anonymous' | 'login' | 'register';
 
@@ -24,13 +25,16 @@ function App() {
 
   useEffect(() => {
     if (!token || user) return;
-    currentUser().then(({ user: restored }) => setUser(restored)).catch(() => {
-      localStorage.removeItem('chat_token');
-      setToken(null);
-    });
+    currentUser()
+      .then(({ user: restored }) =>
+        setUser(restored))
+      .catch(() => {
+        localStorage.removeItem('chat_token');
+        setToken(null);
+      });
   }, [token, user]);
 
-  const enter = (result: { user: User; token: string }) => {
+  const enter = (result: AuthResponse) => {
     localStorage.setItem('chat_token', result.token);
     setToken(result.token);
     setUser(result.user);

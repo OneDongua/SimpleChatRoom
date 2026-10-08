@@ -361,6 +361,7 @@ io.on('connection', (socket) => {
     socket.leave(roomChannel(roomId));
   });
 
+  // 收到消息：先落库，再广播给房内成员，最后处理未读数
   socket.on('message', (payload, ack) => {
     try {
       if (typeof payload !== 'object' || payload === null) {
